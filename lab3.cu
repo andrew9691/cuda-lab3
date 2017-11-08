@@ -13,21 +13,44 @@ using namespace cv;
         exit(1);                                                            \
     } }
 
-__global__ void turnmat(uchar *image, uchar *out_image, int cols, int rows)
+__global__ void turnmat(uchar *image, uchar *out_image, int rows, int cols)
 {
-    int i = threadIdx.y + blockIdx.y*blockDim.y;
-    int j = threadIdx.x + blockIdx.x*blockDim.x;
+    int i = threadIdx.y + blockIdx.y * blockDim.y;
+    int j = threadIdx.x + blockIdx.x * blockDim.x;
     if (i >= rows || j >= cols)
         return;
 
     uchar *p = image + 3 * (i * cols + j);
-    uchar *out_p = out_image + 3 * (i * rows + (cols - 1 - j)); // что-то не так
+    int out_i = cols - 1 - j;
+    int out_j = i;
+    uchar *out_p = out_image + 3 * (out_i * rows + out_j);
 
     for (int ch = 0; ch < 3; ch++)
-    {
       *(out_p + ch) = *(p + ch);
-    }
 }
+
+// __global__ void shared_turnmat(uchar *image, uchar *out_image, int rows, int cols)
+// {
+//     int ty = threadIdx.y;
+//     int tx = threadIdx.x;
+//     int by = blockIdx.y;
+//     int bx = blockIdx.x;
+//
+//     int i = ty + by * blockDim.y;
+//     int j = tx + bx * blockDim.x;
+//     if (i >= rows || j >= cols)
+//         return;
+//
+//     __shared__ uchar* sh_im =
+//
+//     uchar *p = image + 3 * (i * cols + j);
+//     int out_i = cols - 1 - j;
+//     int out_j = i;
+//     uchar *out_p = out_image + 3 * (out_i * rows + out_j);
+//
+//     for (int ch = 0; ch < 3; ch++)
+//       *(out_p + ch) = *(p + ch);
+// }
 
 int main(void)
 {
@@ -37,36 +60,39 @@ int main(void)
     image = imread("pic.jpeg", CV_LOAD_IMAGE_COLOR);   // Read the file
     if(! image.data )                              // Check for invalid input
     {
-        cout <<  "Could not open or find the image" << std::endl ;
+        cout << "Could not open or find the image" << std::endl ;
         return -1;
     }
 
-    Mat out_image(image.cols, image.rows, DataType<Vec3b>::type);
+    //Mat out_image1(image.cols, image.rows, DataType<Vec3b>::type);
 
     cudaEvent_t startCUDA, stopCUDA;
-    clock_t startCPU;
-    float elapsedTimeCUDA, elapsedTimeCPU;
+    //clock_t startCPU;
+    float elapsedTimeCUDA/*, elapsedTimeCPU*/;
     cudaEventCreate(&startCUDA);
     cudaEventCreate(&stopCUDA);
 
-    startCPU = clock();
-
-    for (int i = 0; i < image.rows; i++)
-    {
-        Vec3b* p = image.ptr<Vec3b>(i);
-        for (int j = 0; j < image.cols; j++)
-        {
-            Vec3b* out_p = out_image.ptr<Vec3b>(j);
-            out_p[i] = p[image.cols - j - 1];
-        }
-    }
-
-    elapsedTimeCPU = (double)(clock()-startCPU)/CLOCKS_PER_SEC;
-    cout << "CPU sum time = " << elapsedTimeCPU*1000 << " ms\n";
-    cout << "CPU memory throughput = " << 3*N*sizeof(float)/elapsedTimeCPU/1024/1024/1024 << " Gb/s\n";
+    // startCPU = clock();
+    //
+    // for (int i = 0; i < image.rows; i++)
+    // {
+    //     Vec3b* p = image.ptr<Vec3b>(i);
+    //     for (int j = 0; j < image.cols; j++)
+    //     {
+    //         Vec3b* out_p = out_image1.ptr<Vec3b>(j);
+    //         out_p[i] = p[image.cols - j - 1];
+    //     }
+    // }
+    //
+    // elapsedTimeCPU = (double)(clock()-startCPU)/CLOCKS_PER_SEC;
+    // cout << "CPU sum time = " << elapsedTimeCPU*1000 << " ms\n";
+    // cout << "CPU memory throughput = " << 3*N*sizeof(float)/elapsedTimeCPU/1024/1024/1024 << " Gb/s\n";
+    //
+    // imwrite("pic_resCPU.jpeg", out_image1);
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+    Mat out_image(image.cols, image.rows, DataType<Vec3b>::type);
     uchar *dev_src_image;
 
     uchar * res_src_image;
@@ -78,8 +104,7 @@ int main(void)
 
     cudaEventRecord(startCUDA,0);
 
-    // может поменять gridDim и blockDim местами?
-    turnmat<<<dim3((image.rows + 15) / 16, (image.cols + 15) / 16, 1), dim3(16, 16, 1)>>>(dev_src_image, res_src_image, image.cols, image.rows);
+    turnmat<<<dim3((image.cols + 15) / 16, (image.rows + 15) / 16, 1), dim3(16, 16, 1)>>>(dev_src_image, res_src_image, image.rows, image.cols);
 
     cudaEventRecord(stopCUDA,0);
     cudaEventSynchronize(stopCUDA);
@@ -87,14 +112,12 @@ int main(void)
 
     cudaEventElapsedTime(&elapsedTimeCUDA, startCUDA, stopCUDA);
 
-    //out_image = out_image.clone();
-
     cout << "CUDA sum time = " << elapsedTimeCUDA << " ms\n";
     cout << "CUDA memory throughput = " << 3*N*sizeof(float)/elapsedTimeCUDA/1024/1024/1.024 << " Gb/s\n";
-    CHECK(cudaMemcpy(out_image.data, dev_src_image, 3 * image.cols * image.rows, cudaMemcpyDeviceToHost));
+    CHECK(cudaMemcpy(out_image.data, res_src_image, 3 * image.cols * image.rows, cudaMemcpyDeviceToHost));
+
+    imwrite("pic_resGPU.jpeg", out_image);
+    return 0;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
-
-    imwrite("pic_res.jpeg", out_image);
-    return 0;
 }
