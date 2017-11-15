@@ -31,25 +31,37 @@ __global__ void turnmat(uchar *image, uchar *out_image, int rows, int cols)
 
 // __global__ void shared_turnmat(uchar *image, uchar *out_image, int rows, int cols)
 // {
-//     int ty = threadIdx.y;
-//     int tx = threadIdx.x;
-//     int by = blockIdx.y;
-//     int bx = blockIdx.x;
+//     //__shared__ uchar* temp[BLOCK_DIM][BLOCK_DIM]; // uchar
+//     __shared__ uchar* temp;//[blockDim.y][blockDim.x];
+//     CHECK( cudaMalloc(&temp, 3 * blockDim.x * blockDim.y) );
 //
-//     int i = ty + by * blockDim.y;
-//     int j = tx + bx * blockDim.x;
+//     int i = threadIdx.y + blockIdx.y * blockDim.y;
+//     int j = threadIdx.x + blockIdx.x * blockDim.x;
 //     if (i >= rows || j >= cols)
 //         return;
 //
-//     __shared__ uchar* sh_im =
-//
-//     uchar *p = image + 3 * (i * cols + j);
-//     int out_i = cols - 1 - j;
-//     int out_j = i;
-//     uchar *out_p = out_image + 3 * (out_i * rows + out_j);
+//     uchar3 *p = image + i * cols + j; // 3 *
+//     int new_i = blockDim.y - ((j + 1) % blockDim.y);
+//     int new_j = i % blockDim.x;
+//     temp[new_i][new_j] = p[i][j];
 //
 //     for (int ch = 0; ch < 3; ch++)
-//       *(out_p + ch) = *(p + ch);
+//       *(temp + ch) = *(p + ch);
+//
+//     __syncthreads();
+//
+//     int out_i = cols - 1 - j;
+//     int out_j = i;
+//     out_image[out_i][out_j] = temp[new_i][new_j];
+//
+//     // int ty = threadIdx.y;
+//     // int tx = threadIdx.x;
+//     // int by = blockIdx.y;
+//     // int bx = blockIdx.x;
+//     // int i = ty + by * blockDim.y;
+//     // int j = tx + bx * blockDim.x;
+//     // if (i >= rows || j >= cols)
+//     //     return;
 // }
 
 int main(void)
