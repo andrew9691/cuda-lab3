@@ -20,53 +20,39 @@ __global__ void turnmat(uchar *image, uchar *out_image, int rows, int cols)
     if (i >= rows || j >= cols)
         return;
 
-    uchar *p = image + 3 * (i * cols + j);
     int out_i = cols - 1 - j;
     int out_j = i;
-    uchar *out_p = out_image + 3 * (out_i * rows + out_j);
-
-    for (int ch = 0; ch < 3; ch++)
-      *(out_p + ch) = *(p + ch);
+    ((uchar3*)out_image)[out_i * rows + out_j] = ((uchar3*)image)[i * cols + j];
 }
 
-// __global__ void shared_turnmat(uchar *image, uchar *out_image, int rows, int cols)
-// {
-//     //__shared__ uchar* temp[BLOCK_DIM][BLOCK_DIM]; // uchar
-//     __shared__ uchar* temp;//[blockDim.y][blockDim.x];
-//     CHECK( cudaMalloc(&temp, 3 * blockDim.x * blockDim.y) );
-//
-//     int i = threadIdx.y + blockIdx.y * blockDim.y;
-//     int j = threadIdx.x + blockIdx.x * blockDim.x;
-//     if (i >= rows || j >= cols)
-//         return;
-//
-//     uchar3 *p = image + i * cols + j; // 3 *
-//     int new_i = blockDim.y - ((j + 1) % blockDim.y);
-//     int new_j = i % blockDim.x;
-//     temp[new_i][new_j] = p[i][j];
-//
-//     for (int ch = 0; ch < 3; ch++)
-//       *(temp + ch) = *(p + ch);
-//
-//     __syncthreads();
-//
-//     int out_i = cols - 1 - j;
-//     int out_j = i;
-//     out_image[out_i][out_j] = temp[new_i][new_j];
-//
-//     // int ty = threadIdx.y;
-//     // int tx = threadIdx.x;
-//     // int by = blockIdx.y;
-//     // int bx = blockIdx.x;
-//     // int i = ty + by * blockDim.y;
-//     // int j = tx + bx * blockDim.x;
-//     // if (i >= rows || j >= cols)
-//     //     return;
-// }
+#define shared_x 16
+#define shared_y 16
+
+__global__ void shared_turnmat(uchar *image, uchar *out_image, int rows, int cols)
+{
+    __shared__ uchar4 temp[shared_x][shared_y+1]; // blockDim.x * blockDim.y
+    int tx = threadIdx.x;
+    int ty = threadIdx.y;
+    int i = threadIdx.y + blockIdx.y * blockDim.y;
+    int j = threadIdx.x + blockIdx.x * blockDim.x;
+    if (i >= rows || j >= cols)
+        return;
+
+    int new_i = shared_x - 1 - tx;
+    int new_j = ty;
+    uchar3 ttt = ((uchar3*)image)[i * cols + j];
+    temp[new_i][new_j] = make_uchar4(ttt.x, ttt.y, ttt.z,0);
+
+     __syncthreads();
+
+    int out_i = cols - 1 - blockIdx.x * blockDim.x + ty;
+    int out_j = blockIdx.y * blockDim.y + tx;
+    uchar4 tttt = temp[ty][tx];
+    ((uchar3*)out_image)[out_i * rows + out_j] = make_uchar3(tttt.x, tttt.y, tttt.z);
+}
 
 int main(void)
 {
-    int N = 10*1000*1000;
     Mat image;
 
     image = imread("pic.jpeg", CV_LOAD_IMAGE_COLOR);   // Read the file
@@ -76,31 +62,35 @@ int main(void)
         return -1;
     }
 
-    //Mat out_image1(image.cols, image.rows, DataType<Vec3b>::type);
+    Mat out_image1(image.cols, image.rows, DataType<Vec3b>::type);
 
     cudaEvent_t startCUDA, stopCUDA;
-    //clock_t startCPU;
-    float elapsedTimeCUDA/*, elapsedTimeCPU*/;
+    clock_t startCPU;
+    float elapsedTimeCUDA, elapsedTimeCPU;
     cudaEventCreate(&startCUDA);
     cudaEventCreate(&stopCUDA);
 
-    // startCPU = clock();
-    //
-    // for (int i = 0; i < image.rows; i++)
-    // {
-    //     Vec3b* p = image.ptr<Vec3b>(i);
-    //     for (int j = 0; j < image.cols; j++)
-    //     {
-    //         Vec3b* out_p = out_image1.ptr<Vec3b>(j);
-    //         out_p[i] = p[image.cols - j - 1];
-    //     }
-    // }
-    //
-    // elapsedTimeCPU = (double)(clock()-startCPU)/CLOCKS_PER_SEC;
-    // cout << "CPU sum time = " << elapsedTimeCPU*1000 << " ms\n";
-    // cout << "CPU memory throughput = " << 3*N*sizeof(float)/elapsedTimeCPU/1024/1024/1024 << " Gb/s\n";
-    //
-    // imwrite("pic_resCPU.jpeg", out_image1);
+    startCPU = clock();
+#define tile_i 32
+#define tile_j 16
+    for (int it = 0; it < image.rows/tile_i*tile_i; it+=tile_i)
+    {
+        for (int jt = 0; jt < image.cols/tile_j*tile_j; jt+=tile_j)
+        {
+            for(int ii = 0; ii<tile_i; ii++)
+            for(int jj = 0; jj<tile_j; jj++)
+            {
+              int i = it + ii, j = jt+jj;
+              ((Vec3b*)out_image1.data)[out_image1.cols*j+i] = ((Vec3b*)image.data)[image.cols*i + image.cols - j - 1];
+            }
+        }
+    }
+
+    elapsedTimeCPU = (double)(clock()-startCPU)/CLOCKS_PER_SEC;
+    cout << "CPU sum time = " << elapsedTimeCPU*1000 << " ms\n";
+    cout << "CPU memory throughput = " << 6*image.cols*image.rows/elapsedTimeCPU/1024/1024/1024 << " Gb/s\n";
+
+    imwrite("pic_resCPU.jpeg", out_image1);
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -116,7 +106,10 @@ int main(void)
 
     cudaEventRecord(startCUDA,0);
 
-    turnmat<<<dim3((image.cols + 15) / 16, (image.rows + 15) / 16, 1), dim3(16, 16, 1)>>>(dev_src_image, res_src_image, image.rows, image.cols);
+    //int bx = 4, by = 32;
+    int bx = shared_x, by = shared_y;
+    //turnmat<<<dim3((image.cols + (bx-1)) / bx, (image.rows + (by-1)) / by, 1), dim3(bx, by, 1)>>>(dev_src_image, res_src_image, image.rows, image.cols);
+    shared_turnmat<<<dim3((image.cols + (bx-1)) / bx, (image.rows + (by-1)) / by, 1), dim3(bx, by, 1)>>>(dev_src_image, res_src_image, image.rows, image.cols);
 
     cudaEventRecord(stopCUDA,0);
     cudaEventSynchronize(stopCUDA);
@@ -125,7 +118,7 @@ int main(void)
     cudaEventElapsedTime(&elapsedTimeCUDA, startCUDA, stopCUDA);
 
     cout << "CUDA sum time = " << elapsedTimeCUDA << " ms\n";
-    cout << "CUDA memory throughput = " << 3*N*sizeof(float)/elapsedTimeCUDA/1024/1024/1.024 << " Gb/s\n";
+    cout << "CUDA memory throughput = " << 6*image.cols*image.rows/elapsedTimeCUDA/1024/1024/1.024 << " Gb/s\n";
     CHECK(cudaMemcpy(out_image.data, res_src_image, 3 * image.cols * image.rows, cudaMemcpyDeviceToHost));
 
     imwrite("pic_resGPU.jpeg", out_image);
