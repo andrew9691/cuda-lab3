@@ -22,7 +22,7 @@ __global__ void turnmat(uchar *image, uchar *out_image, int rows, int cols)
 
     int out_i = cols - 1 - j;
     int out_j = i;
-    ((uchar3*)out_image)[out_i * rows + out_j] = ((uchar3*)image)[i * cols + j];
+    ((uchar3*)out_image)[out_i * rows + out_j] = ((uchar3*)image)[i * cols + j]; // 13 (int32) + 2 (int64)
 }
 
 #define shared_x 16
@@ -30,7 +30,7 @@ __global__ void turnmat(uchar *image, uchar *out_image, int rows, int cols)
 
 __global__ void shared_turnmat(uchar *image, uchar *out_image, int rows, int cols)
 {
-    __shared__ uchar4 temp[shared_x][shared_y+1]; // blockDim.x * blockDim.y
+    __shared__ uchar4 temp[shared_x][shared_y + 1];
     int tx = threadIdx.x;
     int ty = threadIdx.y;
     int i = threadIdx.y + blockIdx.y * blockDim.y;
@@ -39,17 +39,17 @@ __global__ void shared_turnmat(uchar *image, uchar *out_image, int rows, int col
         return;
 
     int new_i = shared_x - 1 - tx;
-    int new_j = ty;
-    uchar3 ttt = ((uchar3*)image)[i * cols + j];
-    temp[new_i][new_j] = make_uchar4(ttt.x, ttt.y, ttt.z,0);
+    int new_j = ty; // 10 (int32) operations
+    uchar3 ttt = ((uchar3*)image)[i * cols + j]; // 12 (int32) + 1 (int64)
+    temp[new_i][new_j] = make_uchar4(ttt.x, ttt.y, ttt.z, 0); // 4 (int64)
 
      __syncthreads();
 
-    int out_i = cols - 1 - blockIdx.x * blockDim.x + ty;
-    int out_j = blockIdx.y * blockDim.y + tx;
+    int out_i = cols - 1 - blockIdx.x * blockDim.x + ty; // 16
+    int out_j = blockIdx.y * blockDim.y + tx; // 18
     uchar4 tttt = temp[ty][tx];
-    ((uchar3*)out_image)[out_i * rows + out_j] = make_uchar3(tttt.x, tttt.y, tttt.z);
-}
+    ((uchar3*)out_image)[out_i * rows + out_j] = make_uchar3(tttt.x, tttt.y, tttt.z); // 20 (int32) + 2 (int64) ==
+}                                                                                     // == 35 (int32)
 
 int main(void)
 {
@@ -71,6 +71,7 @@ int main(void)
     cudaEventCreate(&stopCUDA);
 
     startCPU = clock();
+
 #define tile_i 32
 #define tile_j 16
     for (int it = 0; it < image.rows/tile_i*tile_i; it+=tile_i)
