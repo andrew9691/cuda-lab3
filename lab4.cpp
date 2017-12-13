@@ -1,13 +1,15 @@
 #define CL_HPP_TARGET_OPENCL_VERSION 120
 #define CL_HPP_MINIMUM_OPENCL_VERSION 120
 #include <CL/cl2.hpp>
-
+#include <opencv2/core/core.hpp>
+#include <opencv2/highgui/highgui.hpp>
 #include <iostream>
 #include <time.h>
 #include <string.h>
 
 using namespace cl;
 using namespace std;
+using namespace cv;
 
 #define checkError(func) \
   if (errcode != CL_SUCCESS)\
@@ -20,55 +22,93 @@ using namespace std;
   command; \
   checkError(command);
 
-// __kernel void turnmat(cl_uchar *image, cl_uchar *out_image, cl_int rows, cl_int cols)
+// __kernel void turnmat(__global uchar* in_img, __global uchar* out_img, int rows, int cols)
 // {
 //     int i = get_global_id(1);
 //     int j = get_global_id(0);
 //     if (i >= rows || j >= cols)
 //         return;
 //
-//     cl_int out_i = cols - 1 - j;
-//     cl_int out_j = i;
+//     int out_i = cols - 1 - j;
+//     int out_j = i;
 //
-//     ((cl_uchar3*)out_image)[out_i * rows + out_j] = ((cl_uchar3*)image)[i * cols + j];
+//     ((uchar3*)out_img)[out_i * rows + out_j] = ((uchar3*)in_img)[i * cols + j];
 // }
 
 #define shared_x 16
 #define shared_y 16
 
-// __kernel void shared_turnmat(cl_uchar *image, cl_uchar *out_image, cl_int rows, cl_int cols)
+// __kernel void shared_turnmat(uchar *image, uchar *out_image, int rows, int cols)
 // {
-//     __local cl_uchar4 temp[shared_x][shared_y + 1];
-//     cl_int tx = get_local_id(0);
-//     cl_int ty = get_local_id(1);
+//     __local uchar4 temp[shared_x][shared_y + 1];
+//     int tx = get_local_id(0);
+//     int ty = get_local_id(1);
 //     int i = get_global_id(1);
 //     int j = get_global_id(0);
 //     if (i >= rows || j >= cols)
 //         return;
 //
-//     cl_int new_i = shared_x - 1 - tx;
-//     cl_int new_j = ty;
-//     cl_uchar3 ttt = ((cl_uchar3*)image)[i * cols + j];
+//     int new_i = shared_x - 1 - tx;
+//     int new_j = ty;
+//     uchar3 ttt = ((uchar3*)image)[i * cols + j];
 //     temp[new_i][new_j] = make_uchar4(ttt.x, ttt.y, ttt.z, 0);
 //
-//      barrier();
+//     barrier();
 //
-//     cl_int out_i = cols - 1 - get_group_id(0) * get_local_size(0) + ty;
+//     int out_i = cols - 1 - get_group_id(0) * get_local_size(0) + ty;
 //     int out_j = get_group_id(1) * get_local_size(1) + tx;
-//     cl_uchar4 tttt = temp[ty][tx];
-//     ((cl_uchar3*)out_image)[out_i * rows + out_j] = make_uchar3(tttt.x, tttt.y, tttt.z); // ???
+//     uchar4 tttt = temp[ty][tx];
+//     ((uchar3*)out_image)[out_i * rows + out_j] = make_uchar3(tttt.x, tttt.y, tttt.z);
 // }
 
 int main()
 {
+  int device_index = 0;
+  cl_int errcode;
+
+  Mat in_img = imread("pic.jpeg", CV_LOAD_IMAGE_COLOR);   // Read the file
+  if(! in_img.data )                              // Check for invalid input
+  {
+      cout << "Could not open or find the image" << std::endl ;
+      return -1;
+  }
+
+  Mat out_img(in_img.cols, in_img.rows, DataType<Vec3b>::type);
+
   //код kernel-функции
   string sourceString = "\n\
-  __kernel void sum(__global float *a, __global float *b, __global float *c, int N)\n\
+  __kernel void turnmat(__global uchar* in_img, __global uchar* out_img, int rows, int cols)\n\
   {\n\
-    int  id = get_global_id(0);\n\
-    int threadsNum = get_global_size(0);\n\
-    for (int i = id; i < N; i += threadsNum)\n\
-      c[i] = a[i]+b[i];\n\
+    int  i = get_global_id(1);\n\
+    int  j = get_global_id(0);\n\
+    if (i >= rows || j >= cols)\n\
+      return;\n\
+    int out_i = cols - 1 - j;\n\
+    int out_j = i;\n\
+    ((uchar3*)out_img)[out_i * rows + out_j] = ((uchar3*)in_img)[i * cols + j];\n\
+  }";
+
+  string shared_sourceString = "\n\
+  __kernel void shared_turnmat(uchar *image, uchar *out_image, int rows, int cols)\n\
+  {\n\
+    __local uchar4 temp[shared_x][shared_y + 1];\n\
+    int tx = get_local_id(0);\n\
+    int ty = get_local_id(1);\n\
+    int i = get_global_id(1);\n\
+    int j = get_global_id(0);\n\
+    if (i >= rows || j >= cols)\n\
+        return;\n\
+    int new_i = shared_x - 1 - tx;\n\
+    int new_j = ty;\n\
+    uchar3 ttt = ((uchar3*)image)[i * cols + j];\n\
+    temp[new_i][new_j] = make_uchar4(ttt.x, ttt.y, ttt.z, 0);\n\
+    \n\
+    barrier();\n\
+    \n\
+    int out_i = cols - 1 - get_group_id(0) * get_local_size(0) + ty;\n\
+    int out_j = get_group_id(1) * get_local_size(1) + tx;\n\
+    uchar4 tttt = temp[ty][tx];\n\
+    ((uchar3*)out_image)[out_i * rows + out_j] = make_uchar3(tttt.x, tttt.y, tttt.z);\n\
   }";
 
   //получаем список доступных OpenCL-платформ (драйверов OpenCL)
@@ -108,19 +148,20 @@ int main()
       return 1;
   }
   //создаем буфферы в видеопамяти
-  checkErrorEx( Buffer dev_a = Buffer( context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, N*sizeof(float),  host_a, &errcode ) );
-  checkErrorEx( Buffer dev_b = Buffer( context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, N*sizeof(float),  host_b, &errcode ) );
-  checkErrorEx( Buffer dev_c = Buffer( context, CL_MEM_READ_WRITE, N*sizeof(float),  NULL, &errcode ) );
+  checkErrorEx( Buffer dev_in_img = Buffer( context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, 3 * in_img.rows * in_img.cols, in_img.data, &errcode ) );
+  checkErrorEx( Buffer dev_out_img = Buffer( context, CL_MEM_READ_WRITE, 3 * in_img.rows * in_img.cols,  out_img.data, &errcode ) );
 
   //создаем объект - точку входа GPU-программы
-  auto sum = KernelFunctor<Buffer, Buffer, Buffer, int>(program, "sum");
+  auto turnmat = KernelFunctor<Buffer, Buffer, int, int>(program, "turnmat");
 
   //создаем объект, соответствующий определенной конфигурации запуска kernel
-  EnqueueArgs enqueueArgs(queue, cl::NDRange(12*1024)/*globalSize*/, NullRange/*blockSize*/);
+  //EnqueueArgs enqueueArgs(queue, cl::NDRange(12*1024)/*globalSize*/, NullRange/*blockSize*/);
+  int bx = 4, by = 32;
+  EnqueueArgs enqueueArgs(queue, cl::NDRange((in_img.cols + (bx-1)) / bx, (in_img.rows + (by-1)) / by, 1)/*globalSize*/, NullRange/*cl::NDRange(bx, by, 1)blockSize*/);
 
   //запускаем и ждем
   clock_t t0 = clock();
-  Event event = sum(enqueueArgs, dev_a, dev_b, dev_c, N);
+  Event event = turnmat(enqueueArgs, dev_in_img, dev_out_img, in_img.rows, in_img.cols);
   checkErrorEx( errcode = event.wait() );
   clock_t t1 = clock();
 
@@ -136,17 +177,10 @@ int main()
     checkError(event.getEventProfilingInfo);
     elapsedTimeGPU = (double)(time_end - time_start)/1e9;
   }
-  checkErrorEx( errcode = queue.enqueueReadBuffer(dev_c, true, 0, N*sizeof(float), host_c, NULL, NULL) );
-  // check
-  for (int i = 0; i < N; i++)
-      if (::abs(host_c[i] - host_c_check[i]) > 1e-6)
-      {
-          cout << "Error in element N " << i << ": c[i] = " << host_c[i] << " c_check[i] = " << host_c_check[i] << "\n";
-          exit(1);
-      }
-  cout << "CPU sum time = " << elapsedTimeCPU*1000 << " ms\n";
-  cout << "CPU memory throughput = " << 3*N*sizeof(float)/elapsedTimeCPU/1024/1024/1024 << " Gb/s\n";
+
   cout << "GPU sum time = " << elapsedTimeGPU*1000 << " ms\n";
-  cout << "GPU memory throughput = " << 3*N*sizeof(float)/elapsedTimeGPU/1024/1024/1024 << " Gb/s\n";
+  cout << "GPU memory throughput = " << 6*in_img.cols*in_img.rows/elapsedTimeGPU/1024/1024/1024 << " Gb/s\n";
+
+  imwrite("pic_resGPU.jpeg", out_img);
   return 0;
 }
