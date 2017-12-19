@@ -88,6 +88,7 @@ int main()
     ((uchar3*)out_img)[out_i * rows + out_j] = ((uchar3*)in_img)[i * cols + j];\n\
   }";
 
+  ///////////////////////////////////////////////////////////// попробовать заменить shared_x, shared_y на числовые значения
   string shared_sourceString = "\n\
   __kernel void shared_turnmat(uchar *image, uchar *out_image, int rows, int cols)\n\
   {\n\
@@ -137,7 +138,8 @@ int main()
   checkErrorEx( CommandQueue queue(context, devices[device_index], CL_QUEUE_PROFILING_ENABLE, &errcode) );// третий параметр - свойства
 
   //создаем обьект-программу с заданным текстом программы
-  checkErrorEx( Program program = Program(context, sourceString, false/*build*/, &errcode) );
+  checkErrorEx( Program program = Program(context, sourceString, false/*build*/, &errcode) ); ////////////////////////////////////////////////////////////////////////////////////////////////////
+  //checkErrorEx( Program program = Program(context, shared_sourceString, false/*build*/, &errcode) );
 
   //компилируем и линкуем программу для видеокарты
   errcode = program.build(devices, "-cl-fast-relaxed-math -cl-no-signed-zeros -cl-mad-enable");
@@ -149,19 +151,22 @@ int main()
   }
   //создаем буфферы в видеопамяти
   checkErrorEx( Buffer dev_in_img = Buffer( context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, 3 * in_img.rows * in_img.cols, in_img.data, &errcode ) );
-  checkErrorEx( Buffer dev_out_img = Buffer( context, CL_MEM_READ_WRITE, 3 * in_img.rows * in_img.cols,  out_img.data, &errcode ) );
+  checkErrorEx( Buffer dev_out_img = Buffer( context, CL_MEM_READ_WRITE, 3 * in_img.rows * in_img.cols,  out_img.data, &errcode ) ); // CL_MEM_COPY_HOST_PTR ???
 
   //создаем объект - точку входа GPU-программы
-  auto turnmat = KernelFunctor<Buffer, Buffer, int, int>(program, "turnmat");
+  auto turnmat = KernelFunctor<Buffer, Buffer, int, int>(program, "turnmat"); ////////////////////////////////////////////////////////////////////////////////////////////////////
+  //auto turnmat = KernelFunctor<Buffer, Buffer, int, int>(program, "shared_turnmat");
 
   //создаем объект, соответствующий определенной конфигурации запуска kernel
   //EnqueueArgs enqueueArgs(queue, cl::NDRange(12*1024)/*globalSize*/, NullRange/*blockSize*/);
-  int bx = 4, by = 32;
-  EnqueueArgs enqueueArgs(queue, cl::NDRange((in_img.cols + (bx-1)) / bx, (in_img.rows + (by-1)) / by, 1)/*globalSize*/, NullRange/*cl::NDRange(bx, by, 1)blockSize*/);
+  int bx = 4, by = 32; /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  // int bx = shared_x, by = shared_y;
+  EnqueueArgs enqueueArgs(queue, cl::NDRange((in_img.cols + (bx-1)) / bx, (in_img.rows + (by-1)) / by, 1)/*globalSize*/, NullRange/*cl::NDRange(bx, by, 1)blockSize*/); // ???
 
   //запускаем и ждем
   clock_t t0 = clock();
-  Event event = turnmat(enqueueArgs, dev_in_img, dev_out_img, in_img.rows, in_img.cols);
+  Event event = turnmat(enqueueArgs, dev_in_img, dev_out_img, in_img.rows, in_img.cols); ////////////////////////////////////////////////////////////////////////////////////////////////////
+  //Event event = shared_turnmat(enqueueArgs, dev_in_img, dev_out_img, in_img.rows, in_img.cols);
   checkErrorEx( errcode = event.wait() );
   clock_t t1 = clock();
 
