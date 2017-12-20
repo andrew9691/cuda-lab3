@@ -75,8 +75,11 @@ int main()
 
   Mat out_img(in_img.cols, in_img.rows, DataType<Vec3b>::type);
 
+  //struct pix{ char r, g, b; };
+
   //код kernel-функции
   string sourceString = "\n\
+  struct pix{ char r, g, b; };\n\
   __kernel void turnmat(__global uchar* in_img, __global uchar* out_img, int rows, int cols)\n\
   {\n\
     int  i = get_global_id(1);\n\
@@ -85,12 +88,11 @@ int main()
       return;\n\
     int out_i = cols - 1 - j;\n\
     int out_j = i;\n\
-    ((uchar3*)out_img)[out_i * rows + out_j] = ((uchar3*)in_img)[i * cols + j];\n\
+    ((__global struct pix*)out_img)[out_i * rows + out_j] = ((__global struct pix*)in_img)[i * cols + j];\n\
   }";
 
-  ///////////////////////////////////////////////////////////// попробовать заменить shared_x, shared_y на числовые значения
   string shared_sourceString = "\n\
-  __kernel void shared_turnmat(uchar *image, uchar *out_image, int rows, int cols)\n\
+  __kernel void shared_turnmat(__global uchar *image, __global uchar *out_image, int rows, int cols)\n\
   {\n\
     __local uchar4 temp[shared_x][shared_y + 1];\n\
     int tx = get_local_id(0);\n\
@@ -138,7 +140,7 @@ int main()
   checkErrorEx( CommandQueue queue(context, devices[device_index], CL_QUEUE_PROFILING_ENABLE, &errcode) );// третий параметр - свойства
 
   //создаем обьект-программу с заданным текстом программы
-  checkErrorEx( Program program = Program(context, sourceString, false/*build*/, &errcode) ); ////////////////////////////////////////////////////////////////////////////////////////////////////
+  checkErrorEx( Program program = Program(context, sourceString, false/*build*/, &errcode) ); //////////////////////////////////////////////////////////////////////////////
   //checkErrorEx( Program program = Program(context, shared_sourceString, false/*build*/, &errcode) );
 
   //компилируем и линкуем программу для видеокарты
@@ -150,8 +152,8 @@ int main()
       return 1;
   }
   //создаем буфферы в видеопамяти
-  checkErrorEx( Buffer dev_in_img = Buffer( context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, 3 * in_img.rows * in_img.cols, in_img.data, &errcode ) );
-  checkErrorEx( Buffer dev_out_img = Buffer( context, CL_MEM_READ_WRITE, 3 * in_img.rows * in_img.cols,  out_img.data, &errcode ) ); // CL_MEM_COPY_HOST_PTR ???
+  checkErrorEx( Buffer dev_in_img = Buffer( context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, (size_t)3 * in_img.rows * in_img.cols, in_img.data, &errcode ) );
+  checkErrorEx( Buffer dev_out_img = Buffer( context, CL_MEM_READ_WRITE, (size_t)3 * in_img.rows * in_img.cols, out_img.data, &errcode ) );
 
   //создаем объект - точку входа GPU-программы
   auto turnmat = KernelFunctor<Buffer, Buffer, int, int>(program, "turnmat"); ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -161,10 +163,14 @@ int main()
   //EnqueueArgs enqueueArgs(queue, cl::NDRange(12*1024)/*globalSize*/, NullRange/*blockSize*/);
   int bx = 4, by = 32; /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
   // int bx = shared_x, by = shared_y;
-  EnqueueArgs enqueueArgs(queue, cl::NDRange((in_img.cols + (bx-1)) / bx, (in_img.rows + (by-1)) / by, 1)/*globalSize*/, NullRange/*cl::NDRange(bx, by, 1)blockSize*/); // ???
+  EnqueueArgs enqueueArgs(queue, cl::NDRange(in_img.cols, in_img.rows)/*globalSize*/, NullRange/*cl::NDRange(bx, by, 1)blockSize*/); // ???
 
   //запускаем и ждем
   clock_t t0 = clock();
+
+  //cout << "rows = " << in_img.rows << "; cols = " << in_img.cols << endl;
+  //cout << "size = " << sizeof(pix) << endl;
+
   Event event = turnmat(enqueueArgs, dev_in_img, dev_out_img, in_img.rows, in_img.cols); ////////////////////////////////////////////////////////////////////////////////////////////////////
   //Event event = shared_turnmat(enqueueArgs, dev_in_img, dev_out_img, in_img.rows, in_img.cols);
   checkErrorEx( errcode = event.wait() );
@@ -185,6 +191,9 @@ int main()
 
   cout << "GPU sum time = " << elapsedTimeGPU*1000 << " ms\n";
   cout << "GPU memory throughput = " << 6*in_img.cols*in_img.rows/elapsedTimeGPU/1024/1024/1024 << " Gb/s\n";
+
+  //clEnqueueReadBuffer(queue, dev_out_img, CL_TRUE, 0, (size_t)3 * in_img.rows * in_img.cols, out_img, 0, NULL, NULL);
+  checkErrorEx( errcode = queue.enqueueReadBuffer(dev_out_img, true, 0, (size_t)3 * in_img.rows * in_img.cols, out_img, NULL, NULL) );
 
   imwrite("pic_resGPU.jpeg", out_img);
   return 0;
