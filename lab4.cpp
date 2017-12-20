@@ -63,6 +63,7 @@ using namespace cv;
 
 int main()
 {
+  //cout << "size = " << sizeof(cl_uchar3) << endl;
   int device_index = 0;
   cl_int errcode;
 
@@ -92,6 +93,10 @@ int main()
   }";
 
   string shared_sourceString = "\n\
+  #define shared_x 16\n\
+  #define shared_y 16\n\
+  struct pix3{ char r, g, b; };\n\
+  struct pix4{ char r, g, b, a; };\n\
   __kernel void shared_turnmat(__global uchar *image, __global uchar *out_image, int rows, int cols)\n\
   {\n\
     __local uchar4 temp[shared_x][shared_y + 1];\n\
@@ -103,15 +108,18 @@ int main()
         return;\n\
     int new_i = shared_x - 1 - tx;\n\
     int new_j = ty;\n\
-    uchar3 ttt = ((uchar3*)image)[i * cols + j];\n\
-    temp[new_i][new_j] = make_uchar4(ttt.x, ttt.y, ttt.z, 0);\n\
+    struct pix3 ttt = ((__global struct pix3*)image)[i * cols + j];\n\
+    //temp[new_i][new_j] = make_uchar4(ttt.r, ttt.g, ttt.b, 0);\n\
+    //struct pix4 kkk = {ttt.r, ttt.g, ttt.b, 0};\n\
+    //((__local struct pix4*)temp)[new_i*rows + new_j] = kkk;\n\
     \n\
-    barrier();\n\
+    barrier(CLK_LOCAL_MEM_FENCE); //CLK_GLOBAL_MEM_FENCE \n\
     \n\
     int out_i = cols - 1 - get_group_id(0) * get_local_size(0) + ty;\n\
     int out_j = get_group_id(1) * get_local_size(1) + tx;\n\
     uchar4 tttt = temp[ty][tx];\n\
-    ((uchar3*)out_image)[out_i * rows + out_j] = make_uchar3(tttt.x, tttt.y, tttt.z);\n\
+    struct pix3 t = {tttt.x, tttt.y, tttt.z};\n\
+    ((__global struct pix3*)out_image)[out_i * rows + out_j] = t;\n\
   }";
 
   //получаем список доступных OpenCL-платформ (драйверов OpenCL)
@@ -140,8 +148,8 @@ int main()
   checkErrorEx( CommandQueue queue(context, devices[device_index], CL_QUEUE_PROFILING_ENABLE, &errcode) );// третий параметр - свойства
 
   //создаем обьект-программу с заданным текстом программы
-  checkErrorEx( Program program = Program(context, sourceString, false/*build*/, &errcode) ); //////////////////////////////////////////////////////////////////////////////
-  //checkErrorEx( Program program = Program(context, shared_sourceString, false/*build*/, &errcode) );
+  //checkErrorEx( Program program = Program(context, sourceString, false/*build*/, &errcode) ); //////////////////////////////////////////////////////////////////////////////
+  checkErrorEx( Program program = Program(context, shared_sourceString, false/*build*/, &errcode) );
 
   //компилируем и линкуем программу для видеокарты
   errcode = program.build(devices, "-cl-fast-relaxed-math -cl-no-signed-zeros -cl-mad-enable");
@@ -156,23 +164,22 @@ int main()
   checkErrorEx( Buffer dev_out_img = Buffer( context, CL_MEM_READ_WRITE, (size_t)3 * in_img.rows * in_img.cols, out_img.data, &errcode ) );
 
   //создаем объект - точку входа GPU-программы
-  auto turnmat = KernelFunctor<Buffer, Buffer, int, int>(program, "turnmat"); ////////////////////////////////////////////////////////////////////////////////////////////////////
-  //auto turnmat = KernelFunctor<Buffer, Buffer, int, int>(program, "shared_turnmat");
+  //auto turnmat = KernelFunctor<Buffer, Buffer, int, int>(program, "turnmat"); ////////////////////////////////////////////////////////////////////////////////////////////////////
+  auto shared_turnmat = KernelFunctor<Buffer, Buffer, int, int>(program, "shared_turnmat");
 
   //создаем объект, соответствующий определенной конфигурации запуска kernel
   //EnqueueArgs enqueueArgs(queue, cl::NDRange(12*1024)/*globalSize*/, NullRange/*blockSize*/);
-  int bx = 4, by = 32; /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  // int bx = shared_x, by = shared_y;
-  EnqueueArgs enqueueArgs(queue, cl::NDRange(in_img.cols, in_img.rows)/*globalSize*/, NullRange/*cl::NDRange(bx, by, 1)blockSize*/); // ???
+  int bx = 4, by = 32; /////////////////////////////////////////////////////////////////
+  //int bx = shared_x, by = shared_y;
+  EnqueueArgs enqueueArgs(queue, cl::NDRange(in_img.cols, in_img.rows), NullRange);
 
   //запускаем и ждем
   clock_t t0 = clock();
 
   //cout << "rows = " << in_img.rows << "; cols = " << in_img.cols << endl;
-  //cout << "size = " << sizeof(pix) << endl;
 
-  Event event = turnmat(enqueueArgs, dev_in_img, dev_out_img, in_img.rows, in_img.cols); ////////////////////////////////////////////////////////////////////////////////////////////////////
-  //Event event = shared_turnmat(enqueueArgs, dev_in_img, dev_out_img, in_img.rows, in_img.cols);
+  //Event event = turnmat(enqueueArgs, dev_in_img, dev_out_img, in_img.rows, in_img.cols); ////////////////////////////////////////////////////////////////////////////////////////////////////
+  Event event = shared_turnmat(enqueueArgs, dev_in_img, dev_out_img, in_img.rows, in_img.cols);
   checkErrorEx( errcode = event.wait() );
   clock_t t1 = clock();
 
@@ -193,7 +200,7 @@ int main()
   cout << "GPU memory throughput = " << 6*in_img.cols*in_img.rows/elapsedTimeGPU/1024/1024/1024 << " Gb/s\n";
 
   //clEnqueueReadBuffer(queue, dev_out_img, CL_TRUE, 0, (size_t)3 * in_img.rows * in_img.cols, out_img, 0, NULL, NULL);
-  checkErrorEx( errcode = queue.enqueueReadBuffer(dev_out_img, true, 0, (size_t)3 * in_img.rows * in_img.cols, out_img, NULL, NULL) );
+  checkErrorEx( errcode = queue.enqueueReadBuffer(dev_out_img, true, 0, (size_t)3 * in_img.rows * in_img.cols, out_img.data, NULL, NULL) );
 
   imwrite("pic_resGPU.jpeg", out_img);
   return 0;
