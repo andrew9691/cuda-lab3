@@ -109,9 +109,7 @@ int main()
     int new_i = shared_x - 1 - tx;\n\
     int new_j = ty;\n\
     struct pix3 ttt = ((__global struct pix3*)image)[i * cols + j];\n\
-    //temp[new_i][new_j] = make_uchar4(ttt.r, ttt.g, ttt.b, 0);\n\
-    //struct pix4 kkk = {ttt.r, ttt.g, ttt.b, 0};\n\
-    //((__local struct pix4*)temp)[new_i*rows + new_j] = kkk;\n\
+    temp[new_i][new_j] = (uchar4)(ttt.r, ttt.g, ttt.b, 0); // верно \n\
     \n\
     barrier(CLK_LOCAL_MEM_FENCE); //CLK_GLOBAL_MEM_FENCE \n\
     \n\
