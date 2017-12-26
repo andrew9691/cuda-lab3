@@ -96,7 +96,6 @@ int main()
   #define shared_x 16\n\
   #define shared_y 16\n\
   struct pix3{ char r, g, b; };\n\
-  struct pix4{ char r, g, b, a; };\n\
   __kernel void shared_turnmat(__global uchar *image, __global uchar *out_image, int rows, int cols)\n\
   {\n\
     __local uchar4 temp[shared_x][shared_y + 1];\n\
