@@ -22,48 +22,14 @@ using namespace cv;
   command; \
   checkError(command);
 
-// __kernel void turnmat(__global uchar* in_img, __global uchar* out_img, int rows, int cols)
-// {
-//     int i = get_global_id(1);
-//     int j = get_global_id(0);
-//     if (i >= rows || j >= cols)
-//         return;
-//
-//     int out_i = cols - 1 - j;
-//     int out_j = i;
-//
-//     ((uchar3*)out_img)[out_i * rows + out_j] = ((uchar3*)in_img)[i * cols + j];
-// }
-
 #define shared_x 16
 #define shared_y 16
 
-// __kernel void shared_turnmat(uchar *image, uchar *out_image, int rows, int cols)
-// {
-//     __local uchar4 temp[shared_x][shared_y + 1];
-//     int tx = get_local_id(0);
-//     int ty = get_local_id(1);
-//     int i = get_global_id(1);
-//     int j = get_global_id(0);
-//     if (i >= rows || j >= cols)
-//         return;
-//
-//     int new_i = shared_x - 1 - tx;
-//     int new_j = ty;
-//     uchar3 ttt = ((uchar3*)image)[i * cols + j];
-//     temp[new_i][new_j] = make_uchar4(ttt.x, ttt.y, ttt.z, 0);
-//
-//     barrier();
-//
-//     int out_i = cols - 1 - get_group_id(0) * get_local_size(0) + ty;
-//     int out_j = get_group_id(1) * get_local_size(1) + tx;
-//     uchar4 tttt = temp[ty][tx];
-//     ((uchar3*)out_image)[out_i * rows + out_j] = make_uchar3(tttt.x, tttt.y, tttt.z);
-// }
+struct pix3 {char r, g, b;};
 
 int main()
 {
-  //cout << "size = " << sizeof(cl_uchar3) << endl;
+  cout << "size = " << sizeof(pix3) << endl;
   int device_index = 0;
   cl_int errcode;
 
@@ -75,8 +41,6 @@ int main()
   }
 
   Mat out_img(in_img.cols, in_img.rows, DataType<Vec3b>::type);
-
-  //struct pix{ char r, g, b; };
 
   //код kernel-функции
   string sourceString = "\n\
@@ -96,7 +60,7 @@ int main()
   #define shared_x 16\n\
   #define shared_y 16\n\
   struct pix3{ char r, g, b; };\n\
-  __kernel void shared_turnmat(__global uchar *image, __global uchar *out_image, int rows, int cols)\n\
+  __kernel void shared_turnmat(__global uchar *image, __global uchar *out_image, int rows, int cols, __global int* count)\n\
   {\n\
     __local uchar4 temp[shared_x][shared_y + 1];\n\
     int tx = get_local_id(0);\n\
@@ -108,15 +72,19 @@ int main()
     int new_i = shared_x - 1 - tx;\n\
     int new_j = ty;\n\
     struct pix3 ttt = ((__global struct pix3*)image)[i * cols + j];\n\
-    temp[new_i][new_j] = (uchar4)(ttt.r, ttt.g, ttt.b, 0); // верно \n\
+    temp[new_i][new_j] = (uchar4)(ttt.r, ttt.g, ttt.b, 0);\n\
     \n\
-    barrier(CLK_LOCAL_MEM_FENCE); //CLK_GLOBAL_MEM_FENCE \n\
+    barrier(CLK_LOCAL_MEM_FENCE);\n\
     \n\
-    int out_i = cols - 1 - get_group_id(0) * get_local_size(0) + ty;\n\
+    int out_i = cols - 1 - (1 + get_group_id(0)) * get_local_size(0) + ty;\n\
     int out_j = get_group_id(1) * get_local_size(1) + tx;\n\
     uchar4 tttt = temp[ty][tx];\n\
     struct pix3 t = {tttt.x, tttt.y, tttt.z};\n\
-    ((__global struct pix3*)out_image)[out_i * rows + out_j] = t;\n\
+    int ind = out_i * rows + out_j;\n\
+    //if (ind >= 0 && ind < rows*cols)\n\
+      ((__global struct pix3*)out_image)[ind] = t;\n\
+    //if (ind >= rows*cols)\n\
+      //*count += 1;\n\
   }";
 
   //получаем список доступных OpenCL-платформ (драйверов OpenCL)
@@ -156,27 +124,26 @@ int main()
       cout << "BUILD LOG: " << program.getBuildInfo<CL_PROGRAM_BUILD_LOG>(devices[device_index]) << "\n";
       return 1;
   }
+
+  int ctn = 0;
   //создаем буфферы в видеопамяти
   checkErrorEx( Buffer dev_in_img = Buffer( context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, (size_t)3 * in_img.rows * in_img.cols, in_img.data, &errcode ) );
   checkErrorEx( Buffer dev_out_img = Buffer( context, CL_MEM_READ_WRITE, (size_t)3 * in_img.rows * in_img.cols, out_img.data, &errcode ) );
+  checkErrorEx( Buffer count = Buffer( context, CL_MEM_READ_WRITE| CL_MEM_COPY_HOST_PTR, (size_t)4, &ctn, &errcode ) );
 
   //создаем объект - точку входа GPU-программы
   //auto turnmat = KernelFunctor<Buffer, Buffer, int, int>(program, "turnmat"); ////////////////////////////////////////////////////////////////////////////////////////////////////
-  auto shared_turnmat = KernelFunctor<Buffer, Buffer, int, int>(program, "shared_turnmat");
+  auto shared_turnmat = KernelFunctor<Buffer, Buffer, int, int, Buffer>(program, "shared_turnmat");
 
   //создаем объект, соответствующий определенной конфигурации запуска kernel
-  //EnqueueArgs enqueueArgs(queue, cl::NDRange(12*1024)/*globalSize*/, NullRange/*blockSize*/);
-  int bx = 4, by = 32; /////////////////////////////////////////////////////////////////
-  //int bx = shared_x, by = shared_y;
-  EnqueueArgs enqueueArgs(queue, cl::NDRange(in_img.cols, in_img.rows), NullRange);
+  //EnqueueArgs enqueueArgs(queue, cl::NDRange(in_img.cols, in_img.rows), NullRange); /////////////////////////////////////
+  EnqueueArgs enqueueArgs(queue, cl::NDRange(in_img.cols, in_img.rows), cl::NDRange(shared_x, shared_y));
 
   //запускаем и ждем
   clock_t t0 = clock();
 
-  //cout << "rows = " << in_img.rows << "; cols = " << in_img.cols << endl;
-
   //Event event = turnmat(enqueueArgs, dev_in_img, dev_out_img, in_img.rows, in_img.cols); ////////////////////////////////////////////////////////////////////////////////////////////////////
-  Event event = shared_turnmat(enqueueArgs, dev_in_img, dev_out_img, in_img.rows, in_img.cols);
+  Event event = shared_turnmat(enqueueArgs, dev_in_img, dev_out_img, in_img.rows, in_img.cols, count);
   checkErrorEx( errcode = event.wait() );
   clock_t t1 = clock();
 
@@ -196,9 +163,9 @@ int main()
   cout << "GPU sum time = " << elapsedTimeGPU*1000 << " ms\n";
   cout << "GPU memory throughput = " << 6*in_img.cols*in_img.rows/elapsedTimeGPU/1024/1024/1024 << " Gb/s\n";
 
-  //clEnqueueReadBuffer(queue, dev_out_img, CL_TRUE, 0, (size_t)3 * in_img.rows * in_img.cols, out_img, 0, NULL, NULL);
   checkErrorEx( errcode = queue.enqueueReadBuffer(dev_out_img, true, 0, (size_t)3 * in_img.rows * in_img.cols, out_img.data, NULL, NULL) );
-
+  checkErrorEx( errcode = queue.enqueueReadBuffer(count, true, 0, (size_t)4, &ctn, NULL, NULL) );
+  cout << "count = " << ctn << endl;
   imwrite("pic_resGPU.jpeg", out_img);
   return 0;
 }
